@@ -29,6 +29,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static quickfix.mina.QueueTrackers.newDefaultQueueTracker;
 import static quickfix.mina.QueueTrackers.newMultiSessionWatermarkTracker;
@@ -253,14 +254,18 @@ public class SingleThreadedEventHandlingStrategy implements EventHandlingStrateg
 			private final CountDownLatch latch = new CountDownLatch(1);
 			private final Runnable command;
 			private final String name;
+            private final AtomicBoolean isShuttingDown;
+            private final Thread shutdownHook;
 
 			public RunnableWrapper(Runnable command, String name) {
                             this.command = command;
                             this.name = name;
+                            this.isShuttingDown = new AtomicBoolean(false);
+                            this.shutdownHook = new Thread(() -> isShuttingDown.set(true));
 			}
-
                         @Override
                         public void run() {
+                            Runtime.getRuntime().addShutdownHook(shutdownHook);
                             Thread currentThread = Thread.currentThread();
                             String threadName = currentThread.getName();
                             try {
@@ -271,11 +276,16 @@ public class SingleThreadedEventHandlingStrategy implements EventHandlingStrateg
                             } finally {
                                 latch.countDown();
                                 currentThread.setName(threadName);
+                                if (!this.isShuttingDown.get()) {
+                                    Runtime.getRuntime().removeShutdownHook(this.shutdownHook);
+                                }
                             }
                         }
 
 			public void join() throws InterruptedException {
-                            latch.await();
+                            while (!this.isShuttingDown.get()) {
+                                latch.await(5000,TimeUnit.MILLISECONDS);
+                            }
 			}
 
 			public boolean isAlive() {
